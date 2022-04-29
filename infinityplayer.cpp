@@ -272,7 +272,8 @@ void InfinityPlayer::on_delMediaItem_button_clicked()
 {
     QModelIndex index = mediaItem_tableView->currentIndex();
     QString path = mediaItem_sqlQueryModel.index(index.row(), 1).data().toString();
-    QString sql = QString("DELETE FROM MediaItem WHERE path = '%1'").arg(path);
+    QString dirname = mediaItem_label->text();
+    QString sql = QString("DELETE FROM MediaItem WHERE dirname = '%1' and path = '%2'").arg(dirname, path);
     if(infinityPlayer_sqlQuery->exec(sql)) {
         showMediaItem(mediaDir_listWidget->currentItem());
     }
