@@ -17,6 +17,10 @@ class PlayerControls : public QWidget
     Q_OBJECT
 public:
     explicit PlayerControls(QWidget *parent = nullptr);
+    void playStatus_clicked();
+
+signals:
+    void play();
 
 private:
     QAbstractButton *playStatus_button = nullptr; //控制播放状态

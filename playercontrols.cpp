@@ -16,4 +16,10 @@ PlayerControls::PlayerControls(QWidget *parent)
     layout->addWidget(preOne_button, 1);
     layout->addWidget(nextOne_button, 1);
     setLayout(layout);
+    connect(playStatus_button, &QToolButton::clicked, this, &PlayerControls::playStatus_clicked);
+}
+
+void PlayerControls::playStatus_clicked()
+{
+    emit play();
 }

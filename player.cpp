@@ -863,19 +863,19 @@ Player::~Player()
 {
     if (av)
     {
-        init();
+        Init();
         av_free(av);
     }
 }
 
 //是否正在播放视频中
-bool Player::playing()
+bool Player::Playing()
 {
     return av->quit == 0;
 }
 
 //初始化类，清空av记录的信息以及释放其中申请的空间，并将av填充为0
-void Player::init()
+void Player::Init()
 {
     //释放视频格式上下文空间
     if(av->avFormatCtx)
@@ -965,9 +965,9 @@ void Player::init()
 }
 
 //播放视频
-void Player::play(const char input_file[])
+void Player::Play(const char input_file[], void *wid)
 {
-    init();//初始化类中参数
+    Init();//初始化类中参数
 
     strcpy_s(av->file_name, input_file);
 
@@ -978,7 +978,7 @@ void Player::play(const char input_file[])
         return;
     }
 
-    av->screen = SDL_CreateWindow("MyPlayer", 50, 50, 1280, 720, SDL_WINDOW_OPENGL);
+    av->screen = SDL_CreateWindowFrom(wid);
     SDL_ShowWindow(av->screen);
     av->screen_mutex = SDL_CreateMutex();
 
@@ -987,4 +987,10 @@ void Player::play(const char input_file[])
 
     //循环接收用户控制和视频显示等消息的线程
     ProcessThread(av);
+}
+
+//退出视频播放
+void Player::Quit()
+{
+    Video_Quit(av);
 }

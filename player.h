@@ -94,9 +94,10 @@ class Player
 public:
     Player();//构造函数
     ~Player();//析构函数
-    void init();//初始化类
-    bool playing();//是否正在播放视频中
-    void play(const char input_file[]);//播放视频
+    void Init();//初始化类
+    bool Playing();//是否正在播放视频中
+    void Play(const char input_file[], void *wid);//播放视频
+    void Quit();//退出播放器
 
 private:
     VideoInf *av;
