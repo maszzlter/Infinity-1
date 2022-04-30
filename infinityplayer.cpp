@@ -63,22 +63,8 @@ InfinityPlayer::InfinityPlayer(QWidget *parent)
     layout_table->addWidget(mediaItem_tableView, 6);
     //读入目录
     loadMediaDir();
-    //信号与槽函数
-    connect(mediaDir_listWidget, &QListWidget::itemClicked, this, &InfinityPlayer::showMediaItem);
-    connect(addMediaDir_button, &QToolButton::clicked, this, &InfinityPlayer::on_addMediaDir_button_clicked);
-    connect(delMediaDir_button, &QToolButton::clicked, this, &InfinityPlayer::on_delMediaDir_button_clicked);
-    connect(dirName_lineEdit, &QLineEdit::editingFinished, this, &InfinityPlayer::addMediaDir);
-    connect(dirName_lineEdit_1, &QLineEdit::editingFinished, this, &InfinityPlayer::changeMediaDir);
-    connect(addMediaItem_button, &QToolButton::clicked, this, &InfinityPlayer::on_addMediaItem_button_clicked);
-    connect(delMediaItem_button, &QToolButton::clicked, this, &InfinityPlayer::on_delMediaItem_button_clicked);
-    connect(mediaDir_listWidget, &QListWidget::customContextMenuRequested, this, &InfinityPlayer::on_mediaItem_menu);
-    connect(closeMediaItem_button, &QToolButton::clicked, this, &InfinityPlayer::closeMediaItem);
-    PlayerControls *playerControls = new PlayerControls(this);
-    player_mediaPlayer = new QMediaPlayer(this);
-    audio_audioOutput = new QAudioOutput(this);
-    player_mediaPlayer->setAudioOutput(audio_audioOutput);
+    playerControls = new PlayerControls(this);
     video_videoWidget = new QVideoWidget(this);
-    player_mediaPlayer->setVideoOutput(video_videoWidget);
     QHBoxLayout *layout_center = new QHBoxLayout;
     layout_center->setContentsMargins(0, 0, 0, 0);
     layout_center->addLayout(layout_left, 1);
@@ -90,6 +76,45 @@ InfinityPlayer::InfinityPlayer(QWidget *parent)
     layout->addWidget(playerControls, 1);
     setLayout(layout);
     player = new Player();
+    //信号与槽函数
+    //展示目录项表
+    connect(mediaDir_listWidget, &QListWidget::itemClicked, this, &InfinityPlayer::showMediaItem);
+    //添加目录
+    connect(addMediaDir_button, &QToolButton::clicked, this, &InfinityPlayer::on_addMediaDir_button_clicked);
+    connect(dirName_lineEdit, &QLineEdit::editingFinished, this, &InfinityPlayer::addMediaDir);
+    //删除目录
+    connect(delMediaDir_button, &QToolButton::clicked, this, &InfinityPlayer::on_delMediaDir_button_clicked);
+    //重命名
+    connect(mediaDir_listWidget, &QListWidget::customContextMenuRequested, this, &InfinityPlayer::on_mediaDir_menu);
+    connect(dirName_lineEdit_1, &QLineEdit::editingFinished, this, &InfinityPlayer::changeMediaDir);
+    //添加目录项
+    connect(addMediaItem_button, &QToolButton::clicked, this, &InfinityPlayer::on_addMediaItem_button_clicked);
+    //删除目录项
+    connect(delMediaItem_button, &QToolButton::clicked, this, &InfinityPlayer::on_delMediaItem_button_clicked);
+    //关闭目录项表
+    connect(closeMediaItem_button, &QToolButton::clicked, this, &InfinityPlayer::closeMediaItem);
+    connect(playerControls, &PlayerControls::playStatus_signal, this, [=] {
+        if(isPlay) {
+            playerControls->playStatus_button->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+        }
+        else {
+            playerControls->playStatus_button->setIcon(style()->standardIcon(QStyle::SP_MediaPause));
+        }
+        isPlay = !isPlay;
+        player->Pause();
+    });
+    connect(playerControls, &PlayerControls::preOne_signal, this, [=] {
+        player->Back();
+    });
+    //测试播放功能
+    connect(mediaItem_tableView, &QTableView::doubleClicked, this, [=] {
+        QModelIndex index = mediaItem_tableView->currentIndex();
+        QString path = mediaItem_sqlQueryModel.index(index.row(), 1).data().toString();
+        player->Play(path.toStdString().c_str(), (void*)video_videoWidget->winId());
+        closeMediaItem();
+        isPlay = true;
+        playerControls->playStatus_button->setIcon(style()->standardIcon(QStyle::SP_MediaPause));
+    });
 }
 
 InfinityPlayer::~InfinityPlayer()
@@ -234,8 +259,13 @@ void InfinityPlayer::showMediaItem(QListWidgetItem *item)
     delMediaItem_button->setVisible(true);
     closeMediaItem_button->setVisible(true);
     mediaItem_label->setText(dirname);
-    player_mediaPlayer->pause();
     video_videoWidget->setVisible(false);
+    if(isPlay) {
+        player->Pause();
+        isPlay = false;
+        playerControls->playStatus_button->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
+    }
+    playerControls->playStatus_button->setIcon(style()->standardIcon(QStyle::SP_MediaPlay));
     QString str = QString("SELECT name as Name, path as Path, type as Type FROM MediaItem WHERE dirname = '%1'").arg(dirname);
     mediaItem_sqlQueryModel.setQuery(str);
     mediaItem_tableView->setModel(&mediaItem_sqlQueryModel);
@@ -282,7 +312,7 @@ void InfinityPlayer::on_delMediaItem_button_clicked()
     }
 }
 
-void InfinityPlayer::on_mediaItem_menu(const QPoint &pos)
+void InfinityPlayer::on_mediaDir_menu(const QPoint &pos)
 {
     QMenu *menu = new QMenu(this);
     QAction* change = new QAction(tr("重命名"), menu);
@@ -308,6 +338,15 @@ void InfinityPlayer::closeMediaItem()
     addMediaItem_button->setVisible(false);
     delMediaItem_button->setVisible(false);
     closeMediaItem_button->setVisible(false);
-    player_mediaPlayer->play();
     video_videoWidget->setVisible(true);
+}
+
+void InfinityPlayer::keyPressEvent(QKeyEvent *event)
+{
+    if(event->key() == Qt::Key_Left) {
+        player->Back();
+    }
+    else if(event->key() == Qt::Key_Right) {
+        player->Forward();
+    }
 }

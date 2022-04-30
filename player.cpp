@@ -1,9 +1,9 @@
 ﻿#include <stdio.h>
 #include <math.h>
 #include <iostream>
+#include <stdlib.h>
 #include "player.h"
 #include "sonic.h"
-#include <stdlib.h>
 using namespace std;
 
 sonicStream sncStream;//PCM数据倍速处理流
@@ -21,7 +21,7 @@ void CreatePacketQueue(PacketQueue *q)
 void ClearPacketQueue(PacketQueue *q)
 {
     SDL_LockMutex(q->qMutex);//给共享内存区上锁
-    AVPacketList *pktList;
+    PacketList *pktList;
     while (q->head)
     {
         pktList = q->head;
@@ -50,7 +50,7 @@ void DestroyPacketQueue(PacketQueue *q)
 //将压缩数据包pkt进队
 void PacketQueuePut(PacketQueue *q, AVPacket *pkt)
 {
-    AVPacketList *pktList = (AVPacketList *)av_mallocz(sizeof(AVPacketList));
+    PacketList *pktList = (PacketList *)av_mallocz(sizeof(PacketList));
     pktList->pkt = *pkt;
     pktList->next = NULL;
 
@@ -74,17 +74,22 @@ void PacketQueuePut(PacketQueue *q, AVPacket *pkt)
 //从数据包队列中取出数据放到pkt中，成功放回0
 int PacketQueueGet(VideoInf *av, PacketQueue *q, AVPacket *pkt)
 {
-    AVPacketList *pktList;
+    PacketList *pktList;
     //访问共享内存区
     SDL_LockMutex(q->qMutex);
     while (q->size == 0)//队列中无数据
     {
         SDL_CondWait(q->qCond, q->qMutex);//阻塞等待，并暂时释放互斥锁
-        if(av->quit)
+        if (av->quit)
         {
             printf("user shuts the video!\n");
             SDL_UnlockMutex(q->qMutex);
-;           return -1;
+            return -1;
+        }
+        if(av->pause)
+        {
+            SDL_UnlockMutex(q->qMutex);
+            return -2;
         }
     }
     if (q->head == NULL)
@@ -104,6 +109,32 @@ int PacketQueueGet(VideoInf *av, PacketQueue *q, AVPacket *pkt)
     SDL_UnlockMutex(q->qMutex);
 
     return 0;
+}
+
+//分配图像缓存空间，已经正确分配就不做任何操作
+void AllocatePicture(VideoInf *av, VideoPicture *vp)
+{
+    //该空间缓存是否未分配或者图像的宽高不正确，需要重新分配空间
+    if (!vp->allocated || vp->width != av->width || vp->height != av->height)
+    {
+        if (vp->buffer)//确保没有分配空间，防止内存泄漏
+        {
+            av_free(vp->buffer);
+        }
+        if (vp->frameYUV)//确保没有分配空间，防止内存泄漏
+        {
+            av_frame_free(&vp->frameYUV);
+        }
+
+        vp->allocated = 1;
+        vp->width = av->width;
+        vp->height = av->height;
+
+        //分配空间并给frameYUV挂上buffer缓存
+        vp->buffer = (uint8_t *)av_mallocz(av_image_get_buffer_size(AV_PIX_FMT_YUV420P, av->width, av->height, 1));
+        vp->frameYUV = av_frame_alloc();
+        av_image_fill_arrays(vp->frameYUV->data, vp->frameYUV->linesize, vp->buffer, AV_PIX_FMT_YUV420P, av->width, av->height, 1);
+    }
 }
 
 //获取实际的音频时间
@@ -146,7 +177,7 @@ int ChangeAudioSpeed(VideoInf *av, int nb_samples)
 //解码一帧音频数据，保存到av->audio_buf中
 int DecodeAudioPacket(VideoInf *av)
 {
-    if(av->quit)
+    if (av->quit)
     {
         return -1;
     }
@@ -157,7 +188,7 @@ int DecodeAudioPacket(VideoInf *av)
     for (;;)
     {
         //从解码器中解码得到数据，进行处理后交由音频回调函数送入声卡播放，否则到队列中取包
-        while(avcodec_receive_frame(av->aCodecCtx, frame) == 0)
+        while (avcodec_receive_frame(av->aCodecCtx, frame) == 0)
         {
             //重采样
             int nb_channels = av_get_channel_layout_nb_channels(AV_CH_LAYOUT_STEREO);
@@ -219,7 +250,7 @@ void AudioCallback(void *user_data, Uint8 *stream, int len)
         if (av->audio_buf_idx >= av->audio_buf_size)//缓存数据已全部送入播放器缓存，需要重新解码压缩数据包
         {
             //获取压缩数据包失败，
-            if(DecodeAudioPacket(av) != 0)
+            if (DecodeAudioPacket(av) != 0)
             {
                 return;
             }
@@ -275,7 +306,7 @@ int DecodeThread(void *user_data)
         if (PacketQueueGet(av, &av->video_queue, pkt) != 0)
         {
             printf("get pkt failed!\n");
-            if(av->quit)
+            if (av->quit)
             {
                 printf("user shuts the video!\n");
                 av_frame_free(&frame);
@@ -294,7 +325,7 @@ int DecodeThread(void *user_data)
             continue;
         }
         //解码一帧视频压缩数据，得到视频像素数据
-        if(avcodec_send_packet(av->vCodecCtx, pkt) == 0)
+        if (avcodec_send_packet(av->vCodecCtx, pkt) == 0)
         {
             //一个pkt中可能有多帧数据，需要循环读取
             while (avcodec_receive_frame(av->vCodecCtx, frame) == 0)
@@ -304,14 +335,14 @@ int DecodeThread(void *user_data)
                 while (av->picq_size >= PICTURE_QUEUE_SIZE)
                 {
                     SDL_CondWait(av->picq_cond_write, av->picq_mutex);
-                    if(av->quit)
+                    if (av->quit)
                     {
                         printf("user shuts the video!\n");
                         av_frame_free(&frame);
                         av_packet_unref(pkt);
                         av_packet_free(&pkt);
                         SDL_UnlockMutex(av->picq_mutex);
-            ;           return 0;
+                        return 0;
                     }
                 }
                 SDL_UnlockMutex(av->picq_mutex);
@@ -319,26 +350,7 @@ int DecodeThread(void *user_data)
                 VideoPicture *vp = &av->picture_queue[av->picq_widx];
 
                 //该空间缓存是否未分配或者图像的宽高不正确，需要重新分配空间
-                if (!vp->allocated || vp->width != av->width || vp->height != av->height)
-                {
-                    if (vp->buffer)//确保没有分配空间，防止内存泄漏
-                    {
-                        av_free(vp->buffer);
-                    }
-                    if (vp->frameYUV)//确保没有分配空间，防止内存泄漏
-                    {
-                        av_frame_free(&vp->frameYUV);
-                    }
-
-                    vp->allocated = 1;
-                    vp->width = av->width;
-                    vp->height = av->height;
-
-                    //分配空间并给frameYUV挂上buffer缓存
-                    vp->buffer = (uint8_t *)av_mallocz(av_image_get_buffer_size(AV_PIX_FMT_YUV420P, av->width, av->height, 1));
-                    vp->frameYUV = av_frame_alloc();
-                    av_image_fill_arrays(vp->frameYUV->data, vp->frameYUV->linesize, vp->buffer, AV_PIX_FMT_YUV420P, av->width, av->height, 1);
-                }
+                AllocatePicture(av, vp);
 
                 //获取该帧的时间戳
                 double pts = frame->pts * av_q2d(av->vStream->time_base);
@@ -367,10 +379,8 @@ int DecodeThread(void *user_data)
 //视频刷新定时器回调函数
 static Uint32 RefreshTimerCallBack(Uint32 interval, void *user_data)
 {
-    SDL_Event event;
-    event.user.data1 = user_data;
-    event.type = VIDEO_REFRESH_EVENT;
-    SDL_PushEvent(&event);
+    VideoInf *av = (VideoInf *)user_data;
+    SDL_CondSignal(av->refresh_cond);
     return 0;
 }
 
@@ -378,6 +388,49 @@ static Uint32 RefreshTimerCallBack(Uint32 interval, void *user_data)
 void VideoRefreshTimer(VideoInf *av, int delay)
 {
     SDL_AddTimer(delay, RefreshTimerCallBack, av);
+}
+
+//将vp中的图像刷新到屏幕上
+void DisplayPicture(VideoInf *av, VideoPicture *vp)
+{
+    if (vp->frameYUV)
+    {
+        //计算图片显示的位置和大小
+        SDL_Rect sdl_rect;
+        int screen_w, screen_h;
+        double ratio = vp->width * 1.0 / vp->height;
+        SDL_GetWindowSize(av->screen, &screen_w, &screen_h);
+        if(screen_h * ratio > screen_w)
+        {
+            sdl_rect.x = 0;
+            sdl_rect.w = screen_w;
+            sdl_rect.h = screen_w / ratio;
+            sdl_rect.y = (screen_h - sdl_rect.h) / 2;
+        }
+        else
+        {
+            sdl_rect.y = 0;
+            sdl_rect.h = screen_h;
+            sdl_rect.w = screen_h * ratio;
+            sdl_rect.x = (screen_w - sdl_rect.w) / 2;
+        }
+
+        //将图片更新到屏幕上
+        SDL_LockMutex(av->screen_mutex);
+        if(av->resized)//窗口大小发生改变，重新创建纹理和渲染器
+        {
+            SDL_DestroyTexture(av->texture);
+            SDL_DestroyRenderer(av->renderer);
+            av->renderer = SDL_CreateRenderer(av->screen, -1, 0);
+            av->texture = SDL_CreateTexture(av->renderer, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, av->width, av->height);
+            av->resized--;
+        }
+        SDL_UpdateTexture(av->texture, NULL, vp->frameYUV->data[0], vp->frameYUV->linesize[0]);
+        SDL_RenderClear(av->renderer);
+        SDL_RenderCopy(av->renderer, av->texture, NULL, &sdl_rect);
+        SDL_RenderPresent(av->renderer);
+        SDL_UnlockMutex(av->screen_mutex);
+    }
 }
 
 //视频刷新函数，刷新屏幕并开启下一帧的定时器
@@ -392,28 +445,20 @@ void VideoRefresh(void *user_data)
     }
 
     //1.-------刷新显示当前帧到屏幕上---------
-        //检查队列是否有数据
+    //检查队列是否有数据或者处于暂停状态
     if (av->pause || av->picq_size == 0)
-    {//没有图像数据，1ms后再尝试
-        VideoRefreshTimer(av, 1);
+    {
+        VideoRefreshTimer(av, 1);//1ms后再尝试
         return;
     }
 
     //将图片显示到屏幕上
     VideoPicture *vp = &av->picture_queue[av->picq_ridx];
-    if (vp->frameYUV)
-    {
-        SDL_LockMutex(av->screen_mutex);
-
-        av->video_time = av_gettime() / 1000000.0;//更新当前帧显示时对应的系统时间
-
-        //将图片更新到屏幕上
-        SDL_UpdateTexture(av->texture, NULL, vp->frameYUV->data[0], vp->frameYUV->linesize[0]);
-        SDL_RenderCopy(av->renderer, av->texture, NULL, NULL);
-        SDL_RenderPresent(av->renderer);
-
-        SDL_UnlockMutex(av->screen_mutex);
-    }
+//    AllocatePicture(av, &av->picture_buf);
+//    *(av->picture_buf.frameYUV) = *(vp->frameYUV);
+//    av_frame_copy(av->picture_buf.frameYUV, vp->frameYUV);
+    DisplayPicture(av, vp);
+    av->video_time = av_gettime() / 1000000.0;//更新当前帧显示时对应的系统时间
 
     //改变缓存队列大小和移动读指针
     SDL_LockMutex(av->picq_mutex);
@@ -488,8 +533,6 @@ void FullScreen(VideoInf *av)
 
     SDL_LockMutex(av->screen_mutex);
     av->fullScreen = !av->fullScreen;
-    SDL_DestroyTexture(av->texture);
-    SDL_DestroyRenderer(av->renderer);
     if (av->fullScreen)
     {
         SDL_SetWindowFullscreen(av->screen, SDL_WINDOW_FULLSCREEN_DESKTOP);
@@ -498,8 +541,6 @@ void FullScreen(VideoInf *av)
     {
         SDL_SetWindowFullscreen(av->screen, SDL_WINDOW_OPENGL);
     }
-    av->renderer = SDL_CreateRenderer(av->screen, -1, 0);
-    av->texture = SDL_CreateTexture(av->renderer, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, av->width, av->height);
     SDL_UnlockMutex(av->screen_mutex);
 }
 
@@ -521,6 +562,10 @@ void Video_Quit(VideoInf *av)
     {
         SDL_CondSignal(av->audio_queue.qCond);
     }
+    if(av->refresh_cond)
+    {
+        SDL_CondSignal(av->refresh_cond);
+    }
 
     //关闭音频播放
     SDL_CloseAudio();
@@ -529,97 +574,25 @@ void Video_Quit(VideoInf *av)
     if (av->screen) SDL_HideWindow(av->screen);
 }
 
-
-//接受窗口的消息进行处理
-int ProcessThread(VideoInf *av)
+//视频刷新线程
+int VideoRefreshThread(void *user_data)
 {
-    //等待消息到来
-    SDL_Event event;
+    VideoInf *av = (VideoInf *)user_data;
+
     for (;;)
     {
-        SDL_WaitEvent(&event);
-        switch (event.type)
+        SDL_LockMutex(av->refresh_mutex);
+        SDL_CondWait(av->refresh_cond, av->refresh_mutex);//等待刷新计时器结束
+        if (av->quit)
         {
-        case SDL_KEYDOWN:
-            switch (event.key.keysym.sym)
-            {
-            case SDLK_RIGHTBRACKET://播放速度增加
-                av->speed += 0.1;
-                if (av->speed > 2)
-                {
-                    av->speed = 2;
-                }
-                break;
-            case SDLK_LEFTBRACKET://播放速度减少
-                av->speed -= 0.1;
-                if (av->speed < 0.5)
-                {
-                    av->speed = 0.5;
-                }
-                break;
-            case SDLK_LEFT://快退8秒
-                if (!av->seeking && !av->pause)
-                {
-                    double tar_pts = GetAudioTime(av) - 8;
-                    JumpToPts(av, tar_pts);
-                    av->seeking = 1;
-                }
-                break;
-            case SDLK_RIGHT://快进8秒
-                if (!av->seeking && !av->pause)
-                {
-                    double tar_pts = GetAudioTime(av) + 8;
-                    JumpToPts(av, tar_pts);
-                    av->seeking = 1;
-                }
-                break;
-            case SDLK_SPACE://播放/暂停
-                av->pause = !av->pause;
-                SDL_PauseAudio(av->pause);
-                break;
-            case SDLK_UP://提高音量
-                av->volume += 2;
-                if (av->volume > SDL_MIX_MAXVOLUME)
-                {
-                    av->volume = SDL_MIX_MAXVOLUME;
-                }
-                break;
-            case SDLK_DOWN://降低音量
-                av->volume -= 2;
-                if (av->volume < 0)
-                {
-                    av->volume = 0;
-                }
-                break;
-            case SDLK_f://全屏
-                FullScreen(av);
-                break;
-            case SDLK_ESCAPE://关闭播放器
-                if (av->fullScreen)
-                {
-                    FullScreen(av);
-                }
-                else//关闭视频
-                {
-                    Video_Quit(av);
-                }
-                break;
-            default:
-                break;
-            }
-            break;
-        case SDL_QUIT://关闭视频
-            Video_Quit(av);
-            break;
-        case VIDEO_REFRESH_EVENT://刷新视频图像，由当前帧计算延迟启动定时器触发事件
-            if (av->quit) return 0;
-            VideoRefresh(event.user.data1);
-            break;
-        default:
-            break;
+            printf("user shuts the video!\n");
+            SDL_UnlockMutex(av->refresh_mutex);
+            return 0;
         }
+        SDL_UnlockMutex(av->refresh_mutex);
+        VideoRefresh(av);
     }
-    return -1;
+    return 1;
 }
 
 //视频解析线程函数，打开视频文件找到码流并打开音频播放和视频解码线程
@@ -699,17 +672,24 @@ int ParseThread(void *user_data)
         CreatePacketQueue(&av->video_queue);
         av->picq_mutex = SDL_CreateMutex();
         av->picq_cond_write = SDL_CreateCond();
+        av->refresh_mutex = SDL_CreateMutex();
+        av->refresh_cond = SDL_CreateCond();
+        while (!av->screen)
+        {
+            SDL_Delay(1);
+        }
         av->renderer = SDL_CreateRenderer(av->screen, -1, 0);
         av->texture = SDL_CreateTexture(av->renderer, SDL_PIXELFORMAT_IYUV, SDL_TEXTUREACCESS_STREAMING, av->width, av->height);
         //设置视频图像格式转换规则
         av->swsCtx = sws_getContext(av->width, av->height, av->vCodecCtx->pix_fmt,
             av->width, av->height, AV_PIX_FMT_YUV420P, SWS_BILINEAR, NULL, NULL, NULL);
-        av->decode_tid = SDL_CreateThread(DecodeThread, "DecodeThread", av);
-        VideoRefreshTimer(av, 1);
+        av->decode_tid = SDL_CreateThread(DecodeThread, "DecodeThread", av);//创建视频解码线程
+        av->refresh_tid = SDL_CreateThread(VideoRefreshThread, "VideoRefreshThread", av);//创建视频刷新线程
+        VideoRefreshTimer(av, 20);
         av->video_pts = 0;
         av->pre_vpts = 0;
         av->pre_vdelay = 40e-3;
-        av->video_time = av_gettime() / 1000000.0;
+        av->video_time = av_gettime() / 1000000.0 + 20;
     }
 
     //打开解码音频流的相关组件，初始化av结构体中的相关音频信息
@@ -770,7 +750,7 @@ int ParseThread(void *user_data)
         }
 
         //判断是否需要跳转播放位置
-        if (av->seeking)
+        if (av->seeking == 1)
         {
             //选择有码流信息的码流作为跳转基准
             int stream_idx = av->video_idx >= 0 ? av->video_idx : av->audio_idx;
@@ -797,7 +777,7 @@ int ParseThread(void *user_data)
                 PacketQueuePut(&av->audio_queue, &flush_pkt);
             }
 
-            av->seeking = 0;
+            av->seeking = 2;
         }
 
         //队列满就延迟添加
@@ -850,6 +830,131 @@ void Free_Picture_Queue(VideoInf *av)
     }
 }
 
+//创建视频
+int CreateVideo(VideoInf *av, void * wid = NULL)
+{
+    //创建视频显示窗口
+    if (wid)
+    {
+        av->screen = SDL_CreateWindowFrom(wid);
+    }
+    else
+    {
+        av->screen = SDL_CreateWindow("MyPlayer", 50, 50, 1280, 720, SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE);
+    }
+    SDL_ShowWindow(av->screen);
+    av->screen_mutex = SDL_CreateMutex();
+
+    if(wid) return 0;
+
+//    //等待消息到来
+//    SDL_Event event;
+//    for (;;)
+//    {
+//        SDL_WaitEventTimeout(&event, 500);
+//        if(av->quit)
+//        {
+//            return 0;
+//        }
+//        switch (event.type)
+//        {
+//        case SDL_KEYDOWN:
+//            switch (event.key.keysym.sym)
+//            {
+//            case SDLK_RIGHTBRACKET://播放速度增加
+//                av->speed += 0.1;
+//                if (av->speed > 2)
+//                {
+//                    av->speed = 2;
+//                }
+//                break;
+//            case SDLK_LEFTBRACKET://播放速度减少
+//                av->speed -= 0.1;
+//                if (av->speed < 0.5)
+//                {
+//                    av->speed = 0.5;
+//                }
+//                break;
+//            case SDLK_LEFT://快退8秒
+//                if (!av->seeking && !av->pause)
+//                {
+//                    double tar_pts = GetAudioTime(av) - 8;
+//                    JumpToPts(av, tar_pts);
+//                    av->seeking = 1;
+//                }
+//                break;
+//            case SDLK_RIGHT://快进8秒
+//                if (!av->seeking && !av->pause)
+//                {
+//                    double tar_pts = GetAudioTime(av) + 8;
+//                    JumpToPts(av, tar_pts);
+//                    av->seeking = 1;
+//                }
+//                break;
+//            case SDLK_SPACE://播放/暂停
+//                av->pause = !av->pause;
+//                SDL_PauseAudio(av->pause);
+//                break;
+//            case SDLK_UP://提高音量
+//                av->volume += 2;
+//                if (av->volume > SDL_MIX_MAXVOLUME)
+//                {
+//                    av->volume = SDL_MIX_MAXVOLUME;
+//                }
+//                break;
+//            case SDLK_DOWN://降低音量
+//                av->volume -= 2;
+//                if (av->volume < 0)
+//                {
+//                    av->volume = 0;
+//                }
+//                break;
+//            case SDLK_f://全屏
+//                FullScreen(av);
+//                break;
+//            case SDLK_ESCAPE://关闭播放器
+//                if (av->fullScreen)
+//                {
+//                    FullScreen(av);
+//                }
+//                else//关闭视频
+//                {
+//                    Video_Quit(av);
+//                    return 0;
+//                }
+//                break;
+//            default:
+//                break;
+//            }
+//            break;
+//        case SDL_QUIT://关闭视频
+//            Video_Quit(av);
+//            return 0;
+//            break;
+//        default:
+//            break;
+//        }
+//    }
+//    return -1;
+}
+
+//SDL事件滤波器
+int MySdlEventFilter(void *user_data, SDL_Event * event)
+{
+    VideoInf *av = (VideoInf *)user_data;
+
+    if (event->type == SDL_WINDOWEVENT)
+    {
+        if (event->window.event == SDL_WINDOWEVENT_RESIZED || event->window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
+        {
+            av->resized = 2;
+            return 0;
+        }
+    }
+    return 1;
+}
+
+
 //构造函数
 Player::Player()
 {
@@ -868,73 +973,77 @@ Player::~Player()
     }
 }
 
-//是否正在播放视频中
-bool Player::Playing()
-{
-    return av->quit == 0;
-}
-
 //初始化类，清空av记录的信息以及释放其中申请的空间，并将av填充为0
 void Player::Init()
 {
     //释放视频格式上下文空间
-    if(av->avFormatCtx)
+    if (av->avFormatCtx)
     {
         avformat_close_input(&av->avFormatCtx);
     }
 
     //释放视音频解码器上下文空间
-    if(av->vCodecCtx)
+    if (av->vCodecCtx)
     {
         avcodec_close(av->vCodecCtx);
         avcodec_free_context(&av->vCodecCtx);
     }
-    if(av->aCodecCtx)
+    if (av->aCodecCtx)
     {
         avcodec_close(av->aCodecCtx);
         avcodec_free_context(&av->aCodecCtx);
     }
 
     //释放互斥锁变量，信号量等
-    if(av->screen_mutex)
+    if (av->screen_mutex)
     {
         SDL_DestroyMutex(av->screen_mutex);
         av->screen_mutex = NULL;
     }
-    if(av->picq_mutex)
+    if (av->picq_mutex)
     {
         SDL_DestroyMutex(av->picq_mutex);
         av->picq_mutex = NULL;
     }
-    if(av->picq_cond_write)
+    if (av->picq_cond_write)
     {
         SDL_DestroyCond(av->picq_cond_write);
         av->picq_cond_write = NULL;
     }
+    if (av->refresh_mutex)
+    {
+        SDL_DestroyMutex(av->refresh_mutex);
+        av->refresh_mutex = NULL;
+    }
+    if (av->refresh_cond)
+    {
+        SDL_DestroyCond(av->refresh_cond);
+        av->refresh_cond = NULL;
+    }
 
     //销毁SDL相关组件
-    if(av->screen)
+    if (av->screen)
     {
         SDL_DestroyWindow(av->screen);
         av->screen = NULL;
     }
-    if(av->renderer)
+    if (av->renderer)
     {
         SDL_DestroyRenderer(av->renderer);
         av->renderer = NULL;
     }
-    if(av->texture)
+    if (av->texture)
     {
         SDL_DestroyTexture(av->texture);
         av->texture = NULL;
     }
 
     //销毁压缩数据包队列
-    if(av->video_queue.qMutex)
+    if (av->video_queue.qMutex)
     {
         DestroyPacketQueue(&av->video_queue);
     }
-    if(av->audio_queue.qMutex)
+    if (av->audio_queue.qMutex)
     {
         DestroyPacketQueue(&av->audio_queue);
     }
@@ -943,30 +1052,60 @@ void Player::Init()
     Free_Picture_Queue(av);
 
     //释放重采样、图片格式转换上下文
-    if(av->swsCtx)
+    if (av->swsCtx)
     {
         sws_freeContext(av->swsCtx);
         av->swsCtx = NULL;
     }
-    if(av->swrCtx)
+    if (av->swrCtx)
     {
         swr_free(&av->swrCtx);
     }
 
-    //释放音频缓存空间
-    if(av->audio_buf)
+    //释放视音频缓存空间
+    if (av->audio_buf)
     {
         av_free(av->audio_buf);
         av->audio_buf = NULL;
     }
+//    if(av->picture_buf.frameYUV)
+//    {
+//        av_frame_free(&av->picture_buf.frameYUV);
+//        av->picture_buf.frameYUV = NULL;
+//    }
+//    if(av->picture_buf.buffer)
+//    {
+//        av_free(av->picture_buf.buffer);
+//        av->picture_buf.buffer = NULL;
+//    }
 
     //将av置0
     memset(av, 0, sizeof(VideoInf));
 }
 
-//播放视频
-void Player::Play(const char input_file[], void *wid)
+//是否打开了视频文件
+bool Player::Playing()
 {
+    return av->quit == 0;
+}
+
+
+//播放视频，输入视频文件路径和窗口控件的winID
+void Player::Play(const char input_file[], void * wid)
+{
+    if(Playing())
+    {
+        //防止用户恶意连续点击
+        if(GetAudioTime(av) <= 1.5)
+        {
+            return;
+        }
+
+        //确保关闭上个文件的播放线程
+        Quit();
+        SDL_Delay(200);
+    }
+
     Init();//初始化类中参数
 
     strcpy_s(av->file_name, input_file);
@@ -978,19 +1117,130 @@ void Player::Play(const char input_file[], void *wid)
         return;
     }
 
-    av->screen = SDL_CreateWindowFrom(wid);
-    SDL_ShowWindow(av->screen);
-    av->screen_mutex = SDL_CreateMutex();
+    //过滤窗口缩放事件
+    SDL_SetEventFilter(MySdlEventFilter, av);
 
     //创建视频解析线程
     av->parse_tid = SDL_CreateThread(ParseThread, "ParseThread", av);
 
-    //循环接收用户控制和视频显示等消息的线程
-    ProcessThread(av);
+    //创建视频
+    CreateVideo(av, wid);
+
+    //等待视频正常播放
+    SDL_Delay(500);
 }
 
-//退出视频播放
+//暂停-播放切换
+void Player::Pause()
+{
+    if(!Playing()) return;
+    av->pause = !av->pause;
+    if(av->audio_idx >= 0)
+    {
+        SDL_CondSignal(av->audio_queue.qCond);
+        SDL_PauseAudio(av->pause);
+    }
+}
+
+//快退
+void Player::Back()
+{
+    if(!Playing()) return;
+    if (!av->seeking)
+    {
+        double tar_pts = GetAudioTime(av) - 8;
+        JumpToPts(av, tar_pts);
+        av->seeking = 1;
+        while(av->seeking != 2)
+        {
+            SDL_Delay(5);
+        }
+        if(av->pause)
+        {
+            int tmp_volume = av->volume;
+            av->volume = 0;
+            Pause();
+            SDL_Delay(150);
+            Pause();
+            av->volume = tmp_volume;
+        }
+        av->seeking = 0;
+    }
+}
+
+//快进
+void Player::Forward()
+{
+    if(!Playing()) return;
+    if (!av->seeking)
+    {
+        double tar_pts = GetAudioTime(av) + 8;
+        JumpToPts(av, tar_pts);
+        av->seeking = 1;
+        while(av->seeking != 2)
+        {
+            SDL_Delay(5);
+        }
+        if(av->pause)
+        {
+            int tmp_volume = av->volume;
+            av->volume = 0;
+            Pause();
+            SDL_Delay(150);
+            Pause();
+            av->volume = tmp_volume;
+        }
+        av->seeking = 0;
+    }
+}
+
+//加快播放速度
+void Player::SpeedUp()
+{
+    if(!Playing()) return;
+    av->speed += 0.1;
+    if (av->speed > 2)
+    {
+        av->speed = 2;
+    }
+}
+
+//降低播放速度
+void Player::SpeedDown()
+{
+    if(!Playing()) return;
+    av->speed -= 0.1;
+    if (av->speed < 0.5)
+    {
+        av->speed = 0.5;
+    }
+}
+
+//提高音量
+void Player::VolumeUp()
+{
+    if(!Playing()) return;
+    av->volume += 2;
+    if (av->volume > SDL_MIX_MAXVOLUME)
+    {
+        av->volume = SDL_MIX_MAXVOLUME;
+    }
+}
+
+//降低音量
+void Player::VolumeDown()
+{
+    if(!Playing()) return;
+    av->volume -= 2;
+    if (av->volume < 0)
+    {
+        av->volume = 0;
+    }
+}
+
+//退出播放器，即关闭视频文件
 void Player::Quit()
 {
+    if(!Playing()) return;
     Video_Quit(av);
 }

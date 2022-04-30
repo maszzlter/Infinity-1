@@ -10,6 +10,8 @@
 #include <QFileDialog>
 #include <QStyle>
 #include <QListWidget>
+#include <string.h>
+#include <QKeyEvent>
 #include "playercontrols.h"
 #include "player.h"
 
@@ -35,14 +37,21 @@ public:
     InfinityPlayer(QWidget *parent = nullptr);
     ~InfinityPlayer();
     void loadMediaDir();    //加载媒体库目录
+    //添加目录
     void on_addMediaDir_button_clicked();
     void addMediaDir();
+    //删除目录
     void on_delMediaDir_button_clicked();
+    //重命名目录
     void changeMediaDir();
+    //显示目录项
     void showMediaItem(QListWidgetItem *item);
+    //添加目录项
     void on_addMediaItem_button_clicked();
+    //删除目录项
     void on_delMediaItem_button_clicked();
-    void on_mediaItem_menu(const QPoint &pos);
+    void on_mediaDir_menu(const QPoint &pos);
+    //关闭目录项
     void closeMediaItem();
 
 private:
@@ -60,9 +69,12 @@ private:
     QToolButton *delMediaItem_button;    //删除目录项按钮
     QToolButton *closeMediaItem_button; //关闭目录项目录
     QSqlQueryModel mediaItem_sqlQueryModel;  //存放目录查询结果
-    QMediaPlayer *player_mediaPlayer;   //播放器
+    PlayerControls *playerControls;     //控制部分
     QVideoWidget *video_videoWidget;    //播放器视频通道
-    QAudioOutput *audio_audioOutput;    //播放器音频通道
     Player *player;   //后端播放模块
+    bool isPlay = false;    //是否在播放
+
+protected:
+    void keyPressEvent(QKeyEvent *event);   //键盘事件
 };
 #endif // INFINITYPLAYER_H

@@ -25,11 +25,18 @@ extern "C"
 #define VIDEO_REFRESH_EVENT (SDL_USEREVENT)
 #define VIDEO_QUIT_EVENT (SDL_USEREVENT + 1)
 
+//压缩数据包队列结构体
+struct PacketList
+{
+    AVPacket pkt;
+    struct PacketList *next;
+};
+
 //压缩数据包队列
 struct PacketQueue
 {
     int size;//队列数据包个数
-    AVPacketList *head, *tail;//首尾指针
+    PacketList *head, *tail;//首尾指针
     SDL_mutex *qMutex;//队列互斥锁，防止同时访问共享内存空间
     SDL_cond *qCond;//队列信号量，用于同步
 };
@@ -48,13 +55,14 @@ struct VideoInf
 {
     //视频文件的全局参数
     int quit;//关闭视频的标志
+    int resized;//窗口尺寸改变的标志
     char file_name[1024];//视频文件名
     AVFormatContext *avFormatCtx;//视频文件上下文
     int video_idx, audio_idx;//视音频流下标
     AVCodecContext *vCodecCtx, *aCodecCtx;//视音频解码器上下文
     AVCodec *vCodec, *aCodec;//视音频解码器
     AVStream *vStream, *aStream;//视音频流
-    SDL_Thread *parse_tid, *decode_tid;//视频文件解析线程id和视频流解码线程id
+    SDL_Thread *parse_tid, *decode_tid, *refresh_tid;//视频文件解析线程、视频流解码线程id和视频刷新线程id
     int volume;//音量大小，范围为[0, SDL_MIX_MAXVOLUME]
     int fullScreen;//全屏状态
     double speed;//播放速度
@@ -69,9 +77,12 @@ struct VideoInf
 
     //视频相关数据
     VideoPicture picture_queue[PICTURE_QUEUE_SIZE];//图像缓存队列，存放解码并转码后用于播放的图像数据
+//    VideoPicture picture_buf;//保存当前正在显示的图像缓存，用于刷新界面
     int picq_ridx, picq_widx, picq_size;//图像缓存队列的读写下标以及队列的大小
     SDL_mutex *picq_mutex;//图像缓存队列互斥锁
     SDL_cond *picq_cond_write;//图像缓存队列写同步信号量
+    SDL_mutex *refresh_mutex;//用于视频刷新线程的互斥锁
+    SDL_cond *refresh_cond;//用于控制刷新下一帧的同步信号量
     PacketQueue video_queue;//视频压缩数据包队列
     int width, height;//视频图像的宽和高
     SwsContext *swsCtx;//视频格式转换上下文
@@ -94,12 +105,22 @@ class Player
 public:
     Player();//构造函数
     ~Player();//析构函数
-    void Init();//初始化类
-    bool Playing();//是否正在播放视频中
-    void Play(const char input_file[], void *wid);//播放视频
-    void Quit();//退出播放器
+
+public:
+    //以下公共函数都是为前台调用的功能函数，会判断操作的合法性，按需调用即可
+    bool Playing();//是否打开了视频文件
+    void Play(const char input_file[], void *wid = NULL);//播放视频，输入视频文件路径和窗口控件的winID
+    void Pause();//暂停-播放切换功能
+    void Back();//快退，每次跳转8秒
+    void Forward();//快进，每次跳转8秒
+    void SpeedUp();//加快播放速度，每次速度提升0.1，范围[0.5, 2]
+    void SpeedDown();//降低播放速度，每次速度降低0.1，范围[0.5, 2]
+    void VolumeUp();//提高音量，每次提升2音量，范围[0, 128]
+    void VolumeDown();//降低音量，每次降低2音量，范围[0, 128]
+    void Quit();//退出播放器，即关闭当前视频文件
 
 private:
+    void Init();//初始化类
     VideoInf *av;
-
 };
+

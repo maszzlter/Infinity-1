@@ -5,10 +5,12 @@
 #include <QBoxLayout>
 #include <QMediaPlayer>
 #include <QStyle>
+#include <QTimer>
+
 
 QT_BEGIN_NAMESPACE
-class QAbstractButton;
-class QAbstractSlider;
+class QToolButton;
+class QSlider;
 class QComboBox;
 QT_END_NAMESPACE
 
@@ -20,12 +22,15 @@ public:
     void playStatus_clicked();
 
 signals:
-    void play();
+    void playStatus_signal();
+    void preOne_signal();
+    void nextOne_signal();
 
-private:
-    QAbstractButton *playStatus_button = nullptr; //控制播放状态
-    QAbstractButton *preOne_button = nullptr; //控制上一首
-    QAbstractButton *nextOne_button = nullptr;    //控制下一首
+public:
+    QToolButton *playStatus_button = nullptr; //控制播放状态
+    QToolButton *preOne_button = nullptr; //控制上一首
+    QToolButton *nextOne_button = nullptr;    //控制下一首
+
 };
 
 #endif // PLAYERCONTROLS_H
