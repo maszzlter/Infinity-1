@@ -518,8 +518,7 @@ void JumpToPts(VideoInf *av, double pts)
     }
 
     av->tar_pts = pts;
-    double cur_pts = GetAudioTime(av);
-    av->seek_flag = av->tar_pts < cur_pts ? AVSEEK_FLAG_BACKWARD : 0;
+    av->seek_flag = AVSEEK_FLAG_BACKWARD;
 }
 
 //全屏/退出全屏
