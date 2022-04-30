@@ -76,6 +76,15 @@ InfinityPlayer::InfinityPlayer(QWidget *parent)
     layout->addWidget(playerControls, 1);
     setLayout(layout);
     player = new Player();
+    duration_timer = new QTimer(this);
+    connect(duration_timer, &QTimer::timeout, this, [=] {
+        double curDuration = player->GetCurrentTime();
+        if(curDuration >= 0) {
+            qDebug() << "timer:" << curDuration;
+            playerControls->duration_slider->setValue(curDuration);
+        }
+    });
+    duration_timer->start(1000);
     //信号与槽函数
     //展示目录项表
     connect(mediaDir_listWidget, &QListWidget::itemClicked, this, &InfinityPlayer::showMediaItem);
@@ -103,8 +112,17 @@ InfinityPlayer::InfinityPlayer(QWidget *parent)
         isPlay = !isPlay;
         player->Pause();
     });
-    connect(playerControls, &PlayerControls::preOne_signal, this, [=] {
-        player->Back();
+    connect(playerControls, &PlayerControls::volume_signal, this, [=] {
+        int value = playerControls->volume_slider->value();
+        player->SetVolume(value);
+    });
+    connect(playerControls, &PlayerControls::duration_signal, this, [&](int value) {
+        duration_timer->stop();
+        qDebug() << "jump:" << value;
+        player->Jump(value);
+        SDL_Delay(100);
+        qDebug() << "current:" << player->GetCurrentTime();
+        duration_timer->start(1000);
     });
     //测试播放功能
     connect(mediaItem_tableView, &QTableView::doubleClicked, this, [=] {
@@ -114,6 +132,9 @@ InfinityPlayer::InfinityPlayer(QWidget *parent)
         closeMediaItem();
         isPlay = true;
         playerControls->playStatus_button->setIcon(style()->standardIcon(QStyle::SP_MediaPause));
+        player->SetVolume(50);
+        mediaDuration = player->GetTotalDuration();
+        playerControls->duration_slider->setMaximum(int(mediaDuration));
     });
 }
 
@@ -273,7 +294,7 @@ void InfinityPlayer::showMediaItem(QListWidgetItem *item)
 
 void InfinityPlayer::on_addMediaItem_button_clicked()
 {
-    QString path = QFileDialog::getOpenFileName(this,"open file",".","Audio (*.mp3, *.wav);;Video (*.mp4)");
+    QString path = QFileDialog::getOpenFileName(this,"open file",".","Audio (*.mp3 *.wav);;Video (*.mp4)");
     if(path != "") {
         int a = path.lastIndexOf("/");
         int b = path.lastIndexOf(".");
@@ -316,7 +337,7 @@ void InfinityPlayer::on_mediaDir_menu(const QPoint &pos)
 {
     QMenu *menu = new QMenu(this);
     QAction* change = new QAction(tr("重命名"), menu);
-    connect(change, &QAction::triggered, [=] {
+    connect(change, &QAction::triggered, this, [=] {
         QListWidgetItem *item = mediaDir_listWidget->itemAt(pos);
         QModelIndex index = mediaDir_listWidget->indexAt(pos);
         QString oldname = item->data(0).toString();
@@ -344,9 +365,16 @@ void InfinityPlayer::closeMediaItem()
 void InfinityPlayer::keyPressEvent(QKeyEvent *event)
 {
     if(event->key() == Qt::Key_Left) {
-        player->Back();
+//        player->Backward();
+        emit playerControls->playStatus_signal();
+        qDebug() << "left";
     }
     else if(event->key() == Qt::Key_Right) {
         player->Forward();
+        qDebug() << "right";
+    }
+    else if(event->key() == Qt::Key_1) {
+        qDebug() << "1";
+        emit playerControls->playStatus_signal();
     }
 }

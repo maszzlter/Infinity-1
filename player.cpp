@@ -512,9 +512,9 @@ void JumpToPts(VideoInf *av, double pts)
     {
         pts = 0;
     }
-    else if (pts > av->avFormatCtx->duration)
+    else if (pts > av->avFormatCtx->duration / 1000000.0)
     {
-        pts = av->avFormatCtx->duration;
+        pts = av->avFormatCtx->duration / 1000000.0;
     }
 
     av->tar_pts = pts;
@@ -847,95 +847,143 @@ int CreateVideo(VideoInf *av, void * wid = NULL)
 
     if(wid) return 0;
 
-//    //等待消息到来
-//    SDL_Event event;
-//    for (;;)
-//    {
-//        SDL_WaitEventTimeout(&event, 500);
-//        if(av->quit)
-//        {
-//            return 0;
-//        }
-//        switch (event.type)
-//        {
-//        case SDL_KEYDOWN:
-//            switch (event.key.keysym.sym)
-//            {
-//            case SDLK_RIGHTBRACKET://播放速度增加
-//                av->speed += 0.1;
-//                if (av->speed > 2)
-//                {
-//                    av->speed = 2;
-//                }
-//                break;
-//            case SDLK_LEFTBRACKET://播放速度减少
-//                av->speed -= 0.1;
-//                if (av->speed < 0.5)
-//                {
-//                    av->speed = 0.5;
-//                }
-//                break;
-//            case SDLK_LEFT://快退8秒
-//                if (!av->seeking && !av->pause)
-//                {
-//                    double tar_pts = GetAudioTime(av) - 8;
-//                    JumpToPts(av, tar_pts);
-//                    av->seeking = 1;
-//                }
-//                break;
-//            case SDLK_RIGHT://快进8秒
-//                if (!av->seeking && !av->pause)
-//                {
-//                    double tar_pts = GetAudioTime(av) + 8;
-//                    JumpToPts(av, tar_pts);
-//                    av->seeking = 1;
-//                }
-//                break;
-//            case SDLK_SPACE://播放/暂停
-//                av->pause = !av->pause;
-//                SDL_PauseAudio(av->pause);
-//                break;
-//            case SDLK_UP://提高音量
-//                av->volume += 2;
-//                if (av->volume > SDL_MIX_MAXVOLUME)
-//                {
-//                    av->volume = SDL_MIX_MAXVOLUME;
-//                }
-//                break;
-//            case SDLK_DOWN://降低音量
-//                av->volume -= 2;
-//                if (av->volume < 0)
-//                {
-//                    av->volume = 0;
-//                }
-//                break;
-//            case SDLK_f://全屏
-//                FullScreen(av);
-//                break;
-//            case SDLK_ESCAPE://关闭播放器
-//                if (av->fullScreen)
-//                {
-//                    FullScreen(av);
-//                }
-//                else//关闭视频
-//                {
-//                    Video_Quit(av);
-//                    return 0;
-//                }
-//                break;
-//            default:
-//                break;
-//            }
-//            break;
-//        case SDL_QUIT://关闭视频
-//            Video_Quit(av);
-//            return 0;
-//            break;
-//        default:
-//            break;
-//        }
-//    }
-//    return -1;
+    //等待消息到来
+    SDL_Event event;
+    for (;;)
+    {
+        SDL_WaitEventTimeout(&event, 100);
+        if(av->quit)
+        {
+            return 0;
+        }
+        switch (event.type)
+        {
+        case SDL_KEYDOWN:
+            switch (event.key.keysym.sym)
+            {
+            case SDLK_RIGHTBRACKET://播放速度增加
+                av->speed += 0.1;
+                if (av->speed > 2)
+                {
+                    av->speed = 2;
+                }
+                break;
+            case SDLK_LEFTBRACKET://播放速度减少
+                av->speed -= 0.1;
+                if (av->speed < 0.5)
+                {
+                    av->speed = 0.5;
+                }
+                break;
+            case SDLK_LEFT://快退8秒
+                if (!av->seeking)
+                {
+                    double tar_pts = GetAudioTime(av) - 8;
+                    JumpToPts(av, tar_pts);
+                    av->seeking = 1;
+                    while (av->seeking != 2)
+                    {
+                        SDL_Delay(5);
+                    }
+                    if (av->pause)
+                    {
+                        int tmp_volume = av->volume;
+                        av->volume = 0;
+                        av->pause = !av->pause;
+                        if (av->audio_idx >= 0)
+                        {
+                            SDL_CondSignal(av->audio_queue.qCond);
+                            SDL_PauseAudio(av->pause);
+                        }
+                        SDL_Delay(150);
+                        av->pause = !av->pause;
+                        if (av->audio_idx >= 0)
+                        {
+                            SDL_CondSignal(av->audio_queue.qCond);
+                            SDL_PauseAudio(av->pause);
+                        }
+                        av->volume = tmp_volume;
+                    }
+                    av->seeking = 0;
+                }
+                break;
+            case SDLK_RIGHT://快进8秒
+                if (!av->seeking)
+                {
+                    double tar_pts = GetAudioTime(av) + 8;
+                    JumpToPts(av, tar_pts);
+                    av->seeking = 1;
+                    while (av->seeking != 2)
+                    {
+                        SDL_Delay(5);
+                    }
+                    if (av->pause)
+                    {
+                        int tmp_volume = av->volume;
+                        av->volume = 0;
+                        av->pause = !av->pause;
+                        if (av->audio_idx >= 0)
+                        {
+                            SDL_CondSignal(av->audio_queue.qCond);
+                            SDL_PauseAudio(av->pause);
+                        }
+                        SDL_Delay(150);
+                        av->pause = !av->pause;
+                        if (av->audio_idx >= 0)
+                        {
+                            SDL_CondSignal(av->audio_queue.qCond);
+                            SDL_PauseAudio(av->pause);
+                        }
+                        av->volume = tmp_volume;
+                    }
+                    av->seeking = 0;
+                }
+                break;
+            case SDLK_SPACE://播放/暂停
+                av->pause = !av->pause;
+                SDL_PauseAudio(av->pause);
+                break;
+            case SDLK_UP://提高音量
+                av->volume += 2;
+                if (av->volume > SDL_MIX_MAXVOLUME)
+                {
+                    av->volume = SDL_MIX_MAXVOLUME;
+                }
+                break;
+            case SDLK_DOWN://降低音量
+                av->volume -= 2;
+                if (av->volume < 0)
+                {
+                    av->volume = 0;
+                }
+                break;
+            case SDLK_f://全屏
+                FullScreen(av);
+                break;
+            case SDLK_ESCAPE://关闭播放器
+                if (av->fullScreen)
+                {
+                    FullScreen(av);
+                }
+                else//关闭视频
+                {
+                    Video_Quit(av);
+                    return 0;
+                }
+                break;
+            default:
+                break;
+            }
+            break;
+        case SDL_QUIT://关闭视频
+            Video_Quit(av);
+            return 0;
+            break;
+        default:
+            break;
+        }
+    }
+    return -1;
 }
 
 //SDL事件滤波器
@@ -953,7 +1001,6 @@ int MySdlEventFilter(void *user_data, SDL_Event * event)
     }
     return 1;
 }
-
 
 //构造函数
 Player::Player()
@@ -1130,6 +1177,13 @@ void Player::Play(const char input_file[], void * wid)
     SDL_Delay(500);
 }
 
+//判断是否处于暂停状态，返回1表示暂停中，返回0表示播放中，返回-1表示没有打开任何视频
+int Player::Pausing()
+{
+    if(!Playing()) return -1;
+    return av->pause;
+}
+
 //暂停-播放切换
 void Player::Pause()
 {
@@ -1142,8 +1196,49 @@ void Player::Pause()
     }
 }
 
+//获取视频的总长度，没有打开任何视频就返回-1
+double Player::GetTotalDuration()
+{
+    if(!Playing()) return -1;
+    return av->avFormatCtx->duration / 1000000.0;
+}
+
+//获取当前播放进度，没有打开任何视频就返回-1
+double Player::GetCurrentTime()
+{
+    if(!Playing()) return -1;
+    return GetAudioTime(av);
+}
+
+//跳转播放，输入跳转到的时间点，单位是秒，返回是否跳转成功
+bool Player::Jump(double play_time)
+{
+    if(play_time < 0 || play_time > av->avFormatCtx->duration) return false;
+    if(!Playing()) return false;
+    if (!av->seeking)
+    {
+        JumpToPts(av, play_time);
+        av->seeking = 1;
+        while(av->seeking != 2)
+        {
+            SDL_Delay(5);
+        }
+        if(av->pause)
+        {
+            int tmp_volume = av->volume;
+            av->volume = 0;
+            Pause();
+            SDL_Delay(150);
+            Pause();
+            av->volume = tmp_volume;
+        }
+        av->seeking = 0;
+    }
+    return true;
+}
+
 //快退
-void Player::Back()
+void Player::Backward()
 {
     if(!Playing()) return;
     if (!av->seeking)
@@ -1194,6 +1289,16 @@ void Player::Forward()
     }
 }
 
+//设置播放速度，暂时限制[0.5, 3]，返回是否设置成功
+bool Player::SetSpeed(double speed)
+{
+    if(speed < 0.5 || speed > 3) return false;
+    if(!Playing()) return false;
+    av->speed = speed;
+
+    return true;
+}
+
 //加快播放速度
 void Player::SpeedUp()
 {
@@ -1214,6 +1319,16 @@ void Player::SpeedDown()
     {
         av->speed = 0.5;
     }
+}
+
+//设置音量，输入值范围[0, 100]
+bool Player::SetVolume(int volume)
+{
+    if(volume < 0 || volume > 100) return false;
+    if(!Playing()) return false;
+    av->volume = volume * SDL_MIX_MAXVOLUME / 100.0;
+
+    return true;
 }
 
 //提高音量

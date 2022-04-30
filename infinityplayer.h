@@ -12,6 +12,7 @@
 #include <QListWidget>
 #include <string.h>
 #include <QKeyEvent>
+#include <QTimer>
 #include "playercontrols.h"
 #include "player.h"
 
@@ -73,6 +74,8 @@ private:
     QVideoWidget *video_videoWidget;    //播放器视频通道
     Player *player;   //后端播放模块
     bool isPlay = false;    //是否在播放
+    double mediaDuration = -1;   //音视频全长
+    QTimer *duration_timer; //进度定时器
 
 protected:
     void keyPressEvent(QKeyEvent *event);   //键盘事件
